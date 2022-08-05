@@ -8,30 +8,45 @@ import (
 	"os"
 	"path/filepath"
 
+	"bufio"
+	"github.com/juju/gnuflag"
 	"golang.org/x/tools/go/packages"
 	"io/fs"
 	"strings"
 )
 
 var defaultNameCache = map[string]string{}
+var rootDir string
+var skipGenerated bool
+var skipUnique bool
 
 func main() {
-	if len(os.Args) <= 1 {
-		fmt.Println(`
-No dir provided.
-usage:   goalias <dir>`[1:],
-		)
-		os.Exit(1)
-	}
-	dir := os.Args[1]
+	parseArgs()
 
 	// pkgpath -> alias -> count
 	aliasInfo := map[string]map[string]int{}
 
-	err := filepath.Walk(dir, func(path string, info fs.FileInfo, err error) error {
+	err := filepath.Walk(rootDir, func(path string, info fs.FileInfo, err error) error {
 		// Check if this is a Go source file
 		if info.IsDir() || !strings.HasSuffix(info.Name(), ".go") {
 			return nil
+		}
+
+		// Check if file is generated
+		if skipGenerated {
+			file, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+
+			scanner := bufio.NewScanner(file)
+			scanner.Scan()
+			fstLine := scanner.Text()
+
+			if strings.Contains(fstLine, "generated") {
+				return nil
+			}
 		}
 
 		aliases, err := resolveImports(path)
@@ -51,6 +66,27 @@ usage:   goalias <dir>`[1:],
 	}
 
 	printAliasInfo(aliasInfo)
+}
+
+func parseArgs() {
+	// Set flags
+	gnuflag.BoolVar(&skipGenerated, "skip-generated", false, "Skip generated files")
+	gnuflag.BoolVar(&skipUnique, "skip-unique", false, "Don't print packages with a unique alias")
+
+	gnuflag.Parse(true)
+	args := gnuflag.Args()
+
+	if len(args) < 1 {
+		fmt.Println(`
+No dir provided.
+usage:   goalias <dir>`[1:],
+		)
+		os.Exit(1)
+	}
+	rootDir = args[0]
+	//fmt.Printf("rootDir: %s\n", rootDir)
+	//fmt.Printf("skipGenerated: %v\n", skipGenerated)
+	//fmt.Printf("skipUnique: %v\n", skipUnique)
 }
 
 type importAlias struct {
@@ -106,6 +142,9 @@ func getName(impt *ast.ImportSpec, dir string) (string, error) {
 
 func printAliasInfo(aliasInfo map[string]map[string]int) {
 	for pkgpath, counts := range aliasInfo {
+		if skipUnique && len(counts) == 1 {
+			continue
+		}
 		fmt.Printf("Package %q has the following aliases:\n", pkgpath)
 		for alias, num := range counts {
 			fmt.Printf(" - %q in %d files\n", alias, num)
