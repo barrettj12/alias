@@ -117,7 +117,11 @@ func resolveImports(filename string) ([]importAlias, error) {
 // Get the name used to reference this import in the code.
 func getName(impt *ast.ImportSpec, dir string) (string, error) {
 	if impt.Name != nil {
-		return impt.Name.String(), nil
+		name := impt.Name.String()
+		if name == "." || name == "_" {
+			return "", fmt.Errorf("%q is not an alias", name)
+		}
+		return name, nil
 	}
 
 	// If no import name specified - need to find package name defined in source
