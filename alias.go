@@ -2,25 +2,26 @@ package main
 
 import (
 	"fmt"
+	"github.com/gosuri/uitable"
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"path/filepath"
-	"strings"
-
-	"github.com/gosuri/uitable"
 	"os"
+	"path/filepath"
+
+	"golang.org/x/tools/go/packages"
+	"strings"
 )
 
 func main() {
-	if len(os.Args) <= 1 {
+	if len(os.Args) <= 2 {
 		fmt.Println(`
 No filename provided.
-usage:   alias <filename>`[1:],
+usage:   alias -- <filename>`[1:],
 		)
 		os.Exit(1)
 	}
-	filename := os.Args[1]
+	filename := os.Args[2]
 
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, filename, nil, parser.ImportsOnly)
@@ -30,17 +31,28 @@ usage:   alias <filename>`[1:],
 
 	table := uitable.New()
 	for _, impt := range file.Imports {
-		table.AddRow(getName(impt), impt.Path.Value)
-		//fmt.Println(impt)
+		name, err := getName(impt, filepath.Dir(filename))
+		if err != nil {
+			panic(err)
+		}
+		table.AddRow(name, impt.Path.Value)
 	}
 	fmt.Println(table)
 }
 
-func getName(impt *ast.ImportSpec) string {
-	if impt.Name == nil {
-		unquoted := strings.Trim(impt.Path.Value, `"`)
-		base := filepath.Base(unquoted)
-		return strings.Split(base, ".")[0]
+func getName(impt *ast.ImportSpec, dir string) (string, error) {
+	if impt.Name != nil {
+		return impt.Name.String(), nil
 	}
-	return impt.Name.String()
+
+	// If no import name specified - need to find package name defined in source
+	path := strings.Trim(impt.Path.Value, `"`)
+	pkgs, err := packages.Load(&packages.Config{Mode: packages.NeedName, Dir: dir}, path)
+	if err != nil {
+		return "", err
+	}
+	if len(pkgs[0].Errors) > 0 {
+		return "", fmt.Errorf("errors getting package %q: %v", path, pkgs[0].Errors)
+	}
+	return pkgs[0].Name, nil
 }
